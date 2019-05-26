@@ -1,10 +1,10 @@
-%% Import .json data
+%% Import data
 clear all
 
 histo = webread('https://www.binance.com/api/v1/klines?symbol=BNBUSDT&interval=1m&limit=1000');
 %histo = webread('https://min-api.cryptocompare.com/data/histominute?fsym=BNB&tsym=USD&limit=2000');
 
-%% Data cleanup
+%% Data manipulation
 cc = 5; %Close column
 %CryptoCompare API
 %Data: time, close, high, low, open, volumefrom, volumeto
@@ -18,12 +18,12 @@ for i = 1:length(histo)
 	histo(i,1:12) = histo{i,1}';
 end
 histo(:,[2:6 8 10:12]) = num2cell(str2double(histo(:,[2:6 8 10:12])));
-%Converting "seconds" date to real date
-histo(:,1) = num2cell(datetime([repmat([1970 1 1 0 0],length(histo),1) [histo{:,1}]'/1000 ]));
+%Converting "seconds" date to datetime
+histo(:,1) = num2cell(datetime([repmat([1970 1 1 0 0],length(histo),1) [histo{:,1}]'/1000-4*3600 ]));
 
 %MA_diff adds 3 columns to histo: sma_st, sma_lt, ma_diff
-ma_st = 12;
-ma_lt = 26;
+ma_st = 12;%19;
+ma_lt = 26;%28;
 histo(:,end+1:end+3) = num2cell(zeros(length(histo),3));
 for i = ma_st:length(histo)
 	if i >= ma_st
@@ -31,7 +31,7 @@ for i = ma_st:length(histo)
 	end
 	if i >= ma_lt
 		histo{i,end-1} = mean([histo{i-ma_lt+1:i,cc}]);
-		histo{i,end} = histo{i,end-2} - histo{i,end-1};
+		histo{i,end} = histo{i,end-1} - histo{i,end-2};
 	end
 end
 ma_col = size(histo,2);
@@ -64,30 +64,54 @@ for i = macd_st:length(histo)
 end
 macd_col = size(histo,2);
 
-%% Analysis
+%% Investment strategy
 indicator = macd_col;
 
-status = 1; %0:=usdt, 1:=bnb
-start = histo{1,2}; %start price
+status = 0; %0:=usdt, 1:=bnb
 wallet = 1;
-gain = ones(length(histo),2);
+gain = zeros(length(histo),2);
 fee = 0; %fees in %
 for i = macd_lt+macd_s:length(histo)
-	if status && histo{i,indicator} < histo{i-1,indicator} && histo{i,indicator} > 0% && histo{i,cc}/start > fee/100
+	A = status; %En possession de BNB
+	B = histo{i,indicator} > histo{i-1,indicator}; %MACD (diff) est en courbe croissante
+	C = histo{i,indicator} > 0; %MACD (diff) est positive
+	
+	if status && (histo{i,indicator} > histo{i-1,indicator} || (histo{i,indicator} < histo{i-1,indicator} && histo{i,indicator} > 0))% && histo{i,indicator} > 0% && histo{i,cc}/start > fee/100
 		wallet = wallet*(histo{i,cc}/start-fee/100);
 		status = 0;
-	elseif ~status && histo{i,indicator} > histo{i-1,indicator} && histo{i,indicator} < 0
+	elseif ~status && (histo{i,indicator} < histo{i-1,indicator} || (histo{i,indicator} > histo{i-1,indicator} && histo{i,indicator} < 0))% && histo{i,indicator} < 0
 		start = histo{i,cc};
 		status = 1;
 	end
-	gain(i) = wallet;
+	gain(i,1) = status;
+	gain(i,2) = wallet;
 end
+
+maxgain = ones(length(histo)-1,1);
+for i = 2:length(histo)
+	maxgain(i) = maxgain(i-1);
+	if histo{i,cc} > histo{i-1,cc}
+		maxgain(i) = maxgain(i-1)*histo{i,cc}/histo{i-1,cc};
+	end
+end
+%{
+	fgain(ma_lt,ma_st) = gain(end);
+	end
+end
+
+figure(3)
+g = mesh(fgain);
+xlim([start_ma_st end_ma_lt])
+ylim([start_ma_lt end_ma_lt])
+%}
+
 fprintf("Final gains: Investment*%.4g\n", gain(end));
 
 history = 0; %Graph history
 gains = 1; %Graph gains
+maxgains = 0;
 
-start = 0;
+start = 0.1;
 finish = 1;
 step = 0;
 window = 0;
@@ -116,16 +140,26 @@ for i = start:step:finish
 		bar([histo{i:i+window,1}], negative(i:i+window), 'r');
 		hold off
 		yyaxis right
-		plot([histo{i:i+window,1}],[histo{i:i+window,indicator-2}],'-y')
+		plot([histo{i:i+window,1}],[histo{i:i+window,indicator-2}],'-m')
 		hold on
-		plot([histo{i:i+window,1}],[histo{i:i+window,indicator-1}],'-m')
+		plot([histo{i:i+window,1}],[histo{i:i+window,indicator-1}],'-y')
 		hold off
 	end
 	if gains
 		figure(2)
-		plot([histo{i:i+window,1}],gain(i:i+window));
+		plot([histo{i:i+window,1}],gain(i:i+window,2));
+	end
+	if maxgains
+		figure(3)
+		plot([histo{i:i+window,1}],maxgain(i:i+window));
 	end
 	if step ~= finish-start+1
 		pause
 	end
 end
+
+%%
+%{
+[M,I] = max(fgain,[],2);
+[N,J] = max(M);
+%}
